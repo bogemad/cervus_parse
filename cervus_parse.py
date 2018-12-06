@@ -32,11 +32,12 @@ class Parser():
 			if allele == '.' or len(vcf_record.FILTER) > 0:
 				self.report_flag(vcf_record, sample_name, 'No Call')
 				# This is where you need to flag No Call genotype is present
-				return [ '0,' '0' ]
-			elif int(allele) > 1 and flagged == False:
-				self.report_flag(vcf_record, sample_name, 'Unusual genotype: {}'.format(vcf_record.samples[0]['GT']))
+				return [ '0', '0' ]
+			elif int(allele) > 1:
 				genotype.append('2')
-				flagged = True
+				if flagged == False:
+					self.report_flag(vcf_record, sample_name, 'Unusual genotype: {}'.format(vcf_record.samples[0]['GT']))
+					flagged = True
 				# This is where you need to flag when a unusual genotype is present
 			else:
 				genotype.append(str(int(allele)+1))
@@ -57,13 +58,17 @@ class Parser():
 			self.flags[sample_name][(chrom, str(pos))][5].append(flag)
 		else:
 			self.flags[sample_name][(chrom, str(pos))] = [chrom, str(pos), id, ref, alts, [flag], filters, str(qual), types]
-
+	
 	def check_types(self, vcf_record, sample_name):
 		for type in vcf_record.INFO['TYPE']:
 			if type != 'snp':
 				self.report_flag(vcf_record, sample_name, 'Complex/MNP')
-
-
+	
+	def check_borderline_quality(self, vcf_record, sample_name):
+		if vcf_record.QUAL >= 10 and vcf_record.QUAL < 100:
+			self.report_flag(vcf_record, sample_name, 'Borderline quality')
+	
+	
 	def make_flags_all_str(self):
 		for sample_name in self.flags.keys():
 			for chrom, pos in self.flags[sample_name].keys():
@@ -73,8 +78,8 @@ class Parser():
 				filters2 = '|'.join(str(x) for x in filters1)
 				types2 = '|'.join(str(x) for x in types1)
 				self.flags[sample_name][(chrom, str(pos))] = [chrom1, pos1, id1, ref1, alts2, flags2, filters2, qual1, types2]
-
-
+	
+	
 	def read_vcfs(self, vcf_files):
 		data_d = defaultdict(dict)
 		for file in vcf_files:
@@ -87,6 +92,7 @@ class Parser():
 				try:
 					if rec.INFO['HS'] == True:
 						self.check_types(rec, sample_name)
+						self.check_borderline_quality(rec, sample_name)
 						data_d[sample_name][rec.ID] = self.assign_genotype(rec, sample_name)
 					else:
 						print("Error: HS flag = {}".format(rec.INFO['HS']))
