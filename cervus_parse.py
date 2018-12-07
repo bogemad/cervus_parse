@@ -8,7 +8,7 @@ from gooey import Gooey, GooeyParser
 class Parser():
 	def __init__(self, tempdir, infile, outfile):
 		self.infile = infile
-		self.outfile = outfile
+		self.outfile = outfile if os.path.splitext(outfile)[1] == '.csv' else (outfile + '.csv')
 		self.flags = defaultdict(dict)
 		vcf_files = self.extract_data(tempdir)
 		self.hotspot_d = self.get_hotspot_info(vcf_files[0])
@@ -59,14 +59,25 @@ class Parser():
 		else:
 			self.flags[sample_name][(chrom, str(pos))] = [chrom, str(pos), id, ref, alts, [flag], filters, str(qual), types]
 	
-	def check_types(self, vcf_record, sample_name):
+	def check_types_return_true_if_wrong_base(self, vcf_record, sample_name):
+		called_snps = 0
 		for type in vcf_record.INFO['TYPE']:
-			if type != 'snp':
+			if type == 'snp':
+				called_snps += 1
+			else:
 				self.report_flag(vcf_record, sample_name, 'Complex/MNP')
+		if called_snps > 1:
+			self.report_flag(vcf_record, sample_name, 'Wrong hotspot base')
+			return True
+		return False
 	
 	def check_borderline_quality(self, vcf_record, sample_name):
 		if vcf_record.QUAL >= 10 and vcf_record.QUAL < 100:
 			self.report_flag(vcf_record, sample_name, 'Borderline quality')
+	
+	# def check_correct_alt_base(self, vcf_record, sample_name):
+		# for alt in vcf_record.ALT:
+			# if not str(alt) in vcf_record.ALT
 	
 	
 	def make_flags_all_str(self):
@@ -91,9 +102,11 @@ class Parser():
 				# This would be the place to add flags for wrong mutation (compare ALT and OALT?) and flag when hotspot is part of a MNP
 				try:
 					if rec.INFO['HS'] == True:
-						self.check_types(rec, sample_name)
 						self.check_borderline_quality(rec, sample_name)
-						data_d[sample_name][rec.ID] = self.assign_genotype(rec, sample_name)
+						if self.check_types_return_true_if_wrong_base(rec, sample_name) == True:
+							data_d[sample_name][rec.ID] = [ '0', '0' ]
+						else:
+							data_d[sample_name][rec.ID] = self.assign_genotype(rec, sample_name)
 					else:
 						print("Error: HS flag = {}".format(rec.INFO['HS']))
 						sys.exit(1)
