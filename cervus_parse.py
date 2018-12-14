@@ -44,6 +44,19 @@ class Parser():
 		return genotype
 
 
+	def assign_genotype_no_flag(self, vcf_record, sample_name):
+		genotype = []
+		flagged = False
+		for allele in vcf_record.samples[0]['GT'].split('/'):
+			if allele == '.' or len(vcf_record.FILTER) > 0:
+				return [ '0', '0' ]
+			elif int(allele) > 1:
+				genotype.append('2')
+			else:
+				genotype.append(str(int(allele)+1))
+		return genotype
+
+
 	def report_flag(self, vcf_record, sample_name, flag):
 		chrom = vcf_record.CHROM
 		pos = vcf_record.POS
@@ -54,10 +67,11 @@ class Parser():
 		filters = vcf_record.FILTER
 		qual = vcf_record.QUAL
 		types = vcf_record.INFO['TYPE']
+		genotype = self.assign_genotype_no_flag(vcf_record, sample_name)
 		if (chrom, str(pos)) in self.flags[sample_name]:
 			self.flags[sample_name][(chrom, str(pos))][5].append(flag)
 		else:
-			self.flags[sample_name][(chrom, str(pos))] = [chrom, str(pos), id, ref, alts, [flag], filters, str(qual), types]
+			self.flags[sample_name][(chrom, str(pos))] = [chrom, str(pos), id, ref, alts, [flag], filters, str(qual), types, genotype]
 	
 	def check_types_return_true_if_wrong_base(self, vcf_record, sample_name):
 		called_snps = 0
@@ -75,21 +89,42 @@ class Parser():
 		if vcf_record.QUAL >= 10 and vcf_record.QUAL < 100:
 			self.report_flag(vcf_record, sample_name, 'Borderline quality')
 	
-	# def check_correct_alt_base(self, vcf_record, sample_name):
-		# for alt in vcf_record.ALT:
-			# if not str(alt) in vcf_record.ALT
-	
-	
 	def make_flags_all_str(self):
 		for sample_name in self.flags.keys():
 			for chrom, pos in self.flags[sample_name].keys():
-				[chrom1, pos1, id1, ref1, alts1, flags1, filters1, qual1, types1] = self.flags[sample_name][(chrom, str(pos))]
+				[chrom1, pos1, id1, ref1, alts1, flags1, filters1, qual1, types1, genotype] = self.flags[sample_name][(chrom, str(pos))]
 				alts2 = '|'.join(str(x) for x in alts1)
 				flags2 = '|'.join(str(x) for x in flags1)
 				filters2 = '|'.join(str(x) for x in filters1)
 				types2 = '|'.join(str(x) for x in types1)
-				self.flags[sample_name][(chrom, str(pos))] = [chrom1, pos1, id1, ref1, alts2, flags2, filters2, qual1, types2]
+				if genotype == ['0', '0']:
+					gtype = "No Call"
+				elif genotype == ['1', '1']:
+					gtype = "Absent"
+				elif genotype == ['1', '2'] or genotype == ['2', '1']:
+					gtype = "Heterozygous"
+				elif genotype == ['2', '2']:
+					gtype = "Homozygous"
+				else:
+					gtype = "Bad call"
+				self.flags[sample_name][(chrom, str(pos))] = [chrom1, pos1, id1, ref1, alts2, flags2, filters2, qual1, types2, gtype]
 	
+	def check_sane_zygosity(self, vcf_record, sample_name):
+		for i, oid in enumerate(vcf_record.INFO['OID']):
+			if oid in self.hotspot_d:
+				allele_freq = vcf_record.INFO['AF'][i]
+				genotype = self.assign_genotype_no_flag(vcf_record, sample_name)
+				if genotype == ['1','2']:
+					if allele_freq > 0.8:
+						self.report_flag(vcf_record, sample_name, 'Atypical heterozygous call (allele freq > 0.8 [{}])'.format(allele_freq))
+					elif allele_freq < 0.2:
+						self.report_flag(vcf_record, sample_name, 'Atypical heterozygous call (allele freq < 0.2 [{}])'.format(allele_freq))
+				elif genotype == ['1','1']:
+					if allele_freq > 0.07:
+						self.report_flag(vcf_record, sample_name, 'Atypical absent call (allele freq > 0.07 [{}])'.format(allele_freq))
+				elif genotype == ['2','2']:
+					if allele_freq < 0.93:
+						self.report_flag(vcf_record, sample_name, 'Atypical homozygous call (allele freq < 0.93 [{}])'.format(allele_freq))
 	
 	def read_vcfs(self, vcf_files):
 		data_d = defaultdict(dict)
@@ -103,6 +138,7 @@ class Parser():
 				try:
 					if rec.INFO['HS'] == True:
 						self.check_borderline_quality(rec, sample_name)
+						self.check_sane_zygosity(rec, sample_name)
 						if self.check_types_return_true_if_wrong_base(rec, sample_name) == True:
 							data_d[sample_name][rec.ID] = [ '0', '0' ]
 						else:
@@ -161,7 +197,7 @@ class Parser():
 				out_l += data_d[sample][k]
 			outfile.write('{}\n'.format(','.join(out_l)))
 			outflags.write('Sample: {}\n'.format(sample))
-			outflags.write('Chrom,Position,ID,Ref,Variant,Flag,Filter,Quality,Type\n')
+			outflags.write('Chrom,Position,ID,Ref,Variant,Flag,Filter,Quality,Type,Genotype call\n')
 			for flag in sort_nicely(self.flags[sample].values()):
 				outflags.write('{}\n'.format(','.join(flag)))
 			outflags.write('\n')
